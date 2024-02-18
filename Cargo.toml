@@ -1,0 +1,20 @@
+[package]
+name = "tensor"
+authors = ["fzft <fangzhenfutao@gmail.com>"]
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+links = "Accelerate.framework"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rand = "0.8.5"
+rand_distr = "0.4.3"
+rayon = "1.8.1"
+libc = "0.2.153"
+
+[features]
+accelerate = []
+
+
