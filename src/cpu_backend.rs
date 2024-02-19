@@ -10,6 +10,7 @@ use crate::dtype::Dtype;
 use crate::accelerate::dgemm;
 use crate::layout::Layout;
 use crate::strided_index::StridedBlocks;
+use crate::op::UnaryOpT;
 
 
 #[derive(Debug, Clone)]
@@ -106,6 +107,16 @@ impl CpuStorage {
         Ok(CpuStorage::F64(data))
     }
 
+    pub fn unary_op<B: UnaryOpT>(&self, layout: &Layout) -> Result<CpuStorage, Box<dyn Error>> {
+        match self {
+            CpuStorage::F64(data) => {
+                let result = unary_map(data, layout, B::f64);
+                Ok(CpuStorage::F64(result))
+            }
+            _ => unimplemented!("Not implemented yet")
+        }
+    }
+
     pub fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<CpuStorage, Box<dyn Error>> {
         match self {
             CpuStorage::F64(data) => {
@@ -115,6 +126,7 @@ impl CpuStorage {
             _ => unimplemented!("Not implemented yet")
         }
     }
+
 
     #[cfg(not(feature = "accelerate"))]
     pub fn matmul(&self, rhs: &CpuStorage, bmnk: (usize, usize, usize, usize), lhs_layout: &Layout, rhs_layout: &Layout) -> Result<CpuStorage, Box<dyn Error>> {
@@ -194,6 +206,16 @@ impl CpuStorage {
     }
 
 }
+
+fn unary_map<T: Copy, U: Copy, F: FnMut(T)-> U>(data: &[T], layout: &Layout, mut op: F) -> Vec<U> {
+    match layout.strided_blocks() {
+        StridedBlocks::SingleBlock {start_offset, len} => {
+            data[start_offset..start_offset + len].iter().map(|&x| op(x)).collect()
+        }
+        _ => unimplemented!("Not implemented yet")
+    }
+}
+
 
 
 #[cfg(test)]

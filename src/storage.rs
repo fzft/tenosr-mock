@@ -2,6 +2,8 @@ use crate::cpu_backend::CpuStorage;
 use crate::device::Device;
 use crate::dtype::Dtype;
 use crate::layout::Layout;
+use crate::op::UnaryOpT;
+
 
 pub enum Storage {
    Cpu(CpuStorage)
@@ -56,6 +58,15 @@ impl Storage {
         match (self) {
             (Self::Cpu(storage)) => {
                 let storage = storage.affine(layout, mul, add)?;
+                Ok(Storage::Cpu(storage))
+            }
+        }
+    }
+
+    pub fn unary_op<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self, Box<dyn std::error::Error>> {
+        match self {
+            Self::Cpu(storage) => {
+                let storage = storage.unary_op::<B>(layout)?;
                 Ok(Storage::Cpu(storage))
             }
         }

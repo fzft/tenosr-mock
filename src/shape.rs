@@ -44,9 +44,21 @@ impl From <(usize, usize)> for Shape {
     }
 }
 
+impl From <(usize, usize, usize)> for Shape {
+    fn from(shape: (usize, usize, usize)) -> Self {
+        Self(vec![shape.0, shape.1, shape.2])
+    }
+}
+
 impl From<usize> for Shape {
     fn from(shape: usize) -> Self {
         Self(vec![shape])
+    }
+}
+
+impl From<()> for Shape {
+    fn from(_: ()) -> Self {
+        Self(vec![])
     }
 }
 

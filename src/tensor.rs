@@ -5,9 +5,9 @@ use std::sync::Arc;
 use crate::storage::Storage;
 use crate::layout::Layout;
 use crate::dtype::Dtype;
-use crate::device::Device;
+use crate::device::{Device, NdArray};
 use crate::shape::{Shape, ShapeWithOneHole};
-use crate::op::BackpropOp;
+use crate::op::*;
 use crate::cpu_backend::CpuStorage;
 
 
@@ -30,7 +30,30 @@ impl Deref for Tensor {
     }
 }
 
+macro_rules! unary_op {
+    ($name:ident, $op:ident) => {
+        pub fn $name(&self) -> Result<Self, Box<dyn std::error::Error>> {
+           let shape = self.layout.shape();
+           let storage = self.storage.read().unwrap().unary_op::<$op>(&self.layout)?;
+           let none = BackpropOp::none();
+           Ok(from_storage(storage, shape.clone(), none, false))
+        }
+    };
+}
+
 impl Tensor {
+
+    pub fn new<A: NdArray>(
+        array: A,
+        device: &Device,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let shape = array.shape()?;
+        let storage = device.storage(array)?;
+        let op = BackpropOp::none();
+        Ok(from_storage(storage, shape, op, false))
+
+    }
+
     pub fn ones_impl<S: Into<Shape>>(
         shape: S,
         dtype: Dtype,
@@ -216,6 +239,10 @@ impl Tensor {
         let op = BackpropOp::none();
         Ok(from_storage(storage, self.layout.shape().clone(), op, false))
     }
+
+    unary_op!(recip, Reciprocal);
+    unary_op!(abs, Abs);
+    unary_op!(neg, Neg);
 }
 
 impl std::ops::Add<Tensor> for f64 {
@@ -237,7 +264,7 @@ impl std::ops::Add<f64> for Tensor {
 impl std::ops::Sub<Tensor> for f64 {
     type Output = Result<Tensor, Box<dyn std::error::Error>>;
     fn sub(self, rhs: Tensor) -> Self::Output {
-        rhs - self
+        rhs.affine(-1.0, self)
     }
 }
 
@@ -249,6 +276,40 @@ impl std::ops::Sub<f64> for Tensor {
         Ok(from_storage(storage, self.layout.shape().clone(), op, false))
     }
 }
+
+impl std::ops::Mul<Tensor> for f64 {
+    type Output = Result<Tensor, Box<dyn std::error::Error>>;
+    fn mul(self, rhs: Tensor) -> Self::Output {
+        rhs * self
+    }
+}
+
+impl std::ops::Mul<f64> for Tensor {
+    type Output = Result<Tensor, Box<dyn std::error::Error>>;
+    fn mul(self, rhs: f64) -> Self::Output {
+        let storage = self.storage.read().unwrap().affine(&self.layout, rhs, 0.0)?;
+        let op = BackpropOp::none();
+        Ok(from_storage(storage, self.layout.shape().clone(), op, false))
+    }
+}
+
+impl std::ops::Div<Tensor> for f64 {
+    type Output = Result<Tensor, Box<dyn std::error::Error>>;
+    fn div(self, rhs: Tensor) -> Self::Output {
+        rhs.recip()? * self
+    }
+}
+
+impl std::ops::Div<f64> for Tensor {
+    type Output = Result<Tensor, Box<dyn std::error::Error>>;
+    fn div(self, rhs: f64) -> Self::Output {
+        let storage = self.storage.read().unwrap().affine(&self.layout, 1.0 / rhs, 0.0)?;
+        let op = BackpropOp::none();
+        Ok(from_storage(storage, self.layout.shape().clone(), op, false))
+    }
+}
+
+
 
 
 fn from_storage<S: Into<Shape>>(
@@ -586,6 +647,180 @@ mod tests {
         assert_eq!(b.layout.dims(), &[2, 2]);
         assert_eq!(b.layout.strides(), &[2, 1]);
         assert_eq!(b.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn mul_scalar() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = (a * 2.0).unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        assert_eq!(data, &[2.0, 2.0, 2.0, 2.0]);
+        assert_eq!(b.layout.dims(), &[2, 2]);
+        assert_eq!(b.layout.strides(), &[2, 1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn div_scalar() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = (a / 2.0).unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        assert_eq!(data, &[0.5, 0.5, 0.5, 0.5]);
+        assert_eq!(b.layout.dims(), &[2, 2]);
+        assert_eq!(b.layout.strides(), &[2, 1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn Abs() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = a.abs().unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        assert_eq!(data, &[1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(b.layout.dims(), &[2, 2]);
+        assert_eq!(b.layout.strides(), &[2, 1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn Neg() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = a.neg().unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        assert_eq!(data, &[-1.0, -1.0, -1.0, -1.0]);
+        assert_eq!(b.layout.dims(), &[2, 2]);
+        assert_eq!(b.layout.strides(), &[2, 1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn tensor_new_scalar(){
+        let device = Device::Cpu;
+        let a = 1.0;
+        let b = Tensor::new(a, &device).unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        assert_eq!(data, &[1.0]);
+        assert_eq!(b.layout.dims(), &[]);
+        assert_eq!(b.layout.strides(), &[]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn tensor_new_1d(){
+        let device = Device::Cpu;
+        let a = &[1.0, 2.0, 3.0, 4.0];
+        let b = Tensor::new(a, &device).unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        assert_eq!(data, &[1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(b.layout.dims(), &[4]);
+        assert_eq!(b.layout.strides(), &[1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn tensor_new_2d(){
+        let device = Device::Cpu;
+        let a = &[[1.0, 2.0],[3.0, 4.0]];
+        let b = Tensor::new(a, &device).unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        assert_eq!(data, &[1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(b.layout.dims(), &[2, 2]);
+        assert_eq!(b.layout.strides(), &[2, 1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn tensor_new_3d(){
+        let device = Device::Cpu;
+        let a = &[[[1.0, 2.0],[3.0, 4.0]],[[5.0, 6.0],[7.0, 8.0]]];
+        let b = Tensor::new(a, &device).unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        assert_eq!(data, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        assert_eq!(b.layout.dims(), &[2, 2, 2]);
+        assert_eq!(b.layout.strides(), &[4, 2, 1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn tensor_new_matmul(){
+        let device = Device::Cpu;
+        let a = &[[1.0, 2.0],[3.0, 4.0]];
+        let b = &[[1.0, 2.0],[3.0, 4.0]];
+        let c = Tensor::new(a, &device).unwrap();
+        let d = Tensor::new(b, &device).unwrap();
+        let e = c.matmul(&d).unwrap();
+        let storage = e.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        assert_eq!(data, &[7.0, 10.0, 15.0, 22.0]);
+        assert_eq!(e.layout.dims(), &[2, 2]);
+        assert_eq!(e.layout.strides(), &[2, 1]);
+        assert_eq!(e.layout.start_offset(), 0);
     }
 
 }

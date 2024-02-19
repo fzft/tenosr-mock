@@ -10,6 +10,72 @@ pub enum Device {
     Gpu,
 }
 
+pub trait NdArray {
+    fn shape(&self) -> Result<Shape, Box<dyn Error>>;
+
+    fn to_cpu_storage(&self) -> CpuStorage;
+}
+
+impl NdArray for f64 {
+    fn shape(&self) -> Result<Shape, Box<dyn Error>> {
+        Ok(Shape::from(()))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        CpuStorage::F64(vec![*self])
+    }
+}
+
+impl NdArray for &[f64] {
+    fn shape(&self) -> Result<Shape, Box<dyn Error>> {
+        Ok(Shape::from(self.len()))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        CpuStorage::F64(self.to_vec())
+    }
+}
+
+impl NdArray for Vec<f64> {
+    fn shape(&self) -> Result<Shape, Box<dyn Error>> {
+        Ok(Shape::from(self.len()))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        CpuStorage::F64(self.to_vec())
+    }
+}
+
+impl<const N: usize> NdArray for &[f64; N] {
+    fn shape(&self) -> Result<Shape, Box<dyn Error>> {
+        Ok(Shape::from(N))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        CpuStorage::F64(self.to_vec())
+    }
+}
+
+impl<const N: usize, const M: usize > NdArray for &[[f64; M]; N] {
+    fn shape(&self) -> Result<Shape, Box<dyn Error>> {
+        Ok(Shape::from((N, M)))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        CpuStorage::F64(self.iter().flatten().copied().collect())
+    }
+}
+
+impl<const N1: usize, const N2: usize, const N3: usize> NdArray for &[[[f64; N3]; N2]; N1] {
+    fn shape(&self) -> Result<Shape, Box<dyn Error>> {
+        Ok(Shape::from((N1, N2, N3)))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        CpuStorage::F64(self.iter().flatten().flatten().copied().collect())
+    }
+}
+
 impl Device {
     fn is_cpu(&self) -> bool {
         match self {
@@ -70,6 +136,15 @@ impl Device {
             Device::Cpu => {
                 let storage = CpuStorage::from(data)?;
                 Ok(Storage::Cpu(storage))
+            }
+            _ => unimplemented!("Not implemented yet")
+        }
+    }
+
+    pub fn storage<A: NdArray>(&self, data: A) -> Result<Storage, Box<dyn Error>> {
+        match self {
+            Device::Cpu => {
+                Ok(Storage::Cpu(data.to_cpu_storage()))
             }
             _ => unimplemented!("Not implemented yet")
         }
