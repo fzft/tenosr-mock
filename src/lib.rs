@@ -8,6 +8,9 @@ mod device;
 mod op;
 mod accelerate;
 mod strided_index;
+mod backprop;
+mod indexer;
+mod variables;
 
 pub fn add(left: usize, right: usize) -> usize {
     left + right

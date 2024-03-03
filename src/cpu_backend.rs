@@ -19,6 +19,12 @@ pub enum CpuStorage {
     F64(Vec<f64>),
 }
 
+impl From<Vec<f64>> for CpuStorage {
+    fn from(data: Vec<f64>) -> Self {
+        CpuStorage::F64(data)
+    }
+}
+
 impl CpuStorage {
     pub fn ones(shape: &Shape, dtype: &Dtype) -> Result<CpuStorage, Box<dyn Error>> {
         let elements = shape.elem_count();
@@ -52,22 +58,33 @@ impl CpuStorage {
         Ok(storage)
     }
 
-    pub fn copy_strided_src(&self, dst: &mut CpuStorage, dst_offset: usize, src_l: &Layout) -> Result<(), Box<dyn Error>> {
+    pub fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) {
         match (self, dst) {
             (CpuStorage::F64(src), CpuStorage::F64(dst)) => {
                 match src_l.strided_blocks() {
-                    StridedBlocks::SingleBlock {start_offset, len} => {
+                    StridedBlocks::SingleBlock { start_offset, len } => {
                         let to_copy = (dst.len() - dst_offset).min(len);
                         dst[dst_offset..dst_offset + to_copy].copy_from_slice(&src[start_offset..start_offset + to_copy]);
-                        Ok(())
                     }
-                    _ => unimplemented!("Not implemented yet")
+                    StridedBlocks::MultipleBlocks { block_start_index, block_len: 1 } => {
+                        for (dst_index, src_index) in block_start_index.enumerate(){
+                            let dst_index = dst_index + dst_offset;
+                            if dst_index >= dst.len() {
+                                break;
+                            }
+                            dst[dst_index] = src[src_index];
+                        }
+                    }
+                    StridedBlocks::MultipleBlocks { block_start_index, block_len } => {
+                        unimplemented!("Not implemented yet3")
+                    }
                 }
-
             }
             _ => unimplemented!("Not implemented yet")
         }
     }
+
+
     pub fn rand_uniform(lo: f64, hi: f64, shape: &Shape, dtype: &Dtype) -> Result<CpuStorage, Box<dyn Error>> {
         let elements = shape.elem_count();
         let mut rng = rand::thread_rng();
@@ -138,8 +155,8 @@ impl CpuStorage {
                     for mi in 0..m {
                         for ni in 0..n {
                             for ki in 0..k {
-                                let lhs_index = bi * lhs_layout.strides()[0] + mi * lhs_layout.strides()[1] + ki;
-                                let rhs_index = bi * rhs_layout.strides()[0] + ki * rhs_layout.strides()[1] + ni;
+                                let lhs_index = bi * lhs_layout.strides()[0] + ki * lhs_layout.strides()[1] + mi * k;
+                                let rhs_index = bi * rhs_layout.strides()[0] + ni * rhs_layout.strides()[1] + ki * n;
                                 let result_index = bi * m * n + mi * n + ni;
                                 let mut result_guard = result.lock().unwrap();
                                 result_guard[result_index] += lhs[lhs_index] * rhs[rhs_index];
@@ -165,7 +182,6 @@ impl CpuStorage {
                 let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
                 let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
                 let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
-
                 let (lda, transa) = if rhs_m1 == 1 && rhs_m2 == n {
                     (n as i32, b'N')
                 } else if rhs_m1 == k && rhs_m2 == 1 {

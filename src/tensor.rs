@@ -11,7 +11,20 @@ use crate::op::*;
 use crate::cpu_backend::CpuStorage;
 
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+pub struct TensorId(usize);
+
+impl TensorId {
+    fn new() -> Self {
+        use std::sync::atomic;
+        static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
+        Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
+    }
+}
+
+#[derive(Debug)]
 pub struct Tensor_ {
+    id: TensorId,
     storage: Arc<RwLock<Storage>>,
     layout: Layout,
     dtype: Dtype,
@@ -20,7 +33,7 @@ pub struct Tensor_ {
     op: BackpropOp,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Tensor(Arc<Tensor_>);
 
 impl Deref for Tensor {
@@ -30,28 +43,72 @@ impl Deref for Tensor {
     }
 }
 
+impl std::fmt::Display for Tensor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Tensor(id: {:?}, shape: {:?}, dtype: {:?})", self.id, self.layout.shape(), self.dtype)
+    }
+}
+
 macro_rules! unary_op {
     ($name:ident, $op:ident) => {
         pub fn $name(&self) -> Result<Self, Box<dyn std::error::Error>> {
            let shape = self.layout.shape();
            let storage = self.storage.read().unwrap().unary_op::<$op>(&self.layout)?;
-           let none = BackpropOp::none();
-           Ok(from_storage(storage, shape.clone(), none, false))
+           let op = BackpropOp::new1(self, |x| Op::Unary(x, UnaryOp::$op));
+           Ok(from_storage(storage, shape.clone(), op, false))
         }
     };
 }
 
 impl Tensor {
-
     pub fn new<A: NdArray>(
         array: A,
         device: &Device,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_impl(array, device, false)
+    }
+    
+    pub fn new_impl<A: NdArray>(
+        array: A,
+        device: &Device,
+        is_var: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let shape = array.shape()?;
         let storage = device.storage(array)?;
         let op = BackpropOp::none();
-        Ok(from_storage(storage, shape, op, false))
+        Ok(from_storage(storage, shape, op, is_var))
+    }
 
+    pub fn track_op(&self) -> bool {
+        return self.is_var;
+    }
+
+    pub fn op(&self) -> &Option<Op> {
+        &self.op
+    }
+
+    pub fn id(&self) -> TensorId {
+        self.id
+    }
+
+    pub fn shape(&self) -> &Shape {
+        &self.layout.shape()
+    }
+
+    pub fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    pub fn storage(&self) -> &Arc<RwLock<Storage>> {
+        &self.storage
+    }
+
+    pub fn start_offset(&self) -> usize {
+        self.layout.start_offset()
+    }
+    
+    pub fn is_var(&self) -> bool {
+        self.is_var
     }
 
     pub fn ones_impl<S: Into<Shape>>(
@@ -105,6 +162,20 @@ impl Tensor {
         hi: f64,
         shape: S,
         device: &Device,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let shape = shape.into();
+        let dtype = Dtype::F64;
+        let storage = device.rand_uniform(lo, hi, &shape, &dtype)?;
+        let none = BackpropOp::none();
+        let tensor = from_storage(storage, shape, none, false);
+        Ok(tensor)
+    }
+    
+    pub fn rand_uniform_impl<S: Into<Shape>>(
+        lo: f64,
+        hi: f64,
+        shape: S,
+        device: &Device,
         is_val: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let shape = shape.into();
@@ -116,6 +187,20 @@ impl Tensor {
     }
 
     pub fn randn<S: Into<Shape>>(
+        mean: f64,
+        std: f64,
+        shape: S,
+        device: &Device,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let shape = shape.into();
+        let dtype = Dtype::F64;
+        let storage = device.randn(mean, std, &shape, &dtype)?;
+        let none = BackpropOp::none();
+        let tensor = from_storage(storage, shape, none, false);
+        Ok(tensor)
+    }
+    
+    pub fn randn_impl<S: Into<Shape>>(
         mean: f64,
         std: f64,
         shape: S,
@@ -150,6 +235,7 @@ impl Tensor {
         let storage = self.storage.clone();
         let op = BackpropOp::none();
         let tensor = Tensor_ {
+            id: TensorId::new(),
             storage,
             layout,
             device: self.device,
@@ -158,6 +244,14 @@ impl Tensor {
             op,
         };
         Ok(Tensor(Arc::new(tensor)))
+    }
+
+    pub fn make_var(&self) -> Result<Self, Box<dyn std::error::Error>> {
+        let shape = self.layout.shape();
+        let mut storage = self.device.zeros(&shape, &self.dtype)?;
+        let op = BackpropOp::none();
+        self.storage.read().unwrap().copy_strided_src(&mut storage, 0, &self.layout)?;
+        Ok(from_storage(storage, shape.clone(), op, true))
     }
 
     // self : tensor with dim b1, b2, b3 ... , bi, m, k
@@ -173,7 +267,7 @@ impl Tensor {
         let (other_k, other_n) = (other_dims[other_dims.len() - 2], other_dims[other_dims.len() - 1]);
         let self_b = self_dims[..self_dims.len() - 2].iter().product();
         let other_b = other_dims[..other_dims.len() - 2].iter().product();
-        if self_k != other_k || self_b != other_b{
+        if self_k != other_k || self_b != other_b {
             return Err("Invalid shape for matmul".into());
         }
         let c_shape = Shape::from(&self_dims[..self_dims.len() - 2]).extend(&[self_m, other_n]);
@@ -186,6 +280,10 @@ impl Tensor {
 
         let op = BackpropOp::none();
         Ok(from_storage(storage, c_shape, op, false))
+    }
+
+    pub fn ones_like(&self) -> Result<Self, Box<dyn std::error::Error>> {
+        return Tensor::ones(Shape::from(self.layout.dims()), self.dtype, &self.device);
     }
 
     pub fn arange(start: f64, end: f64, step: f64, dtype: Dtype, device: &Device) -> Result<Self, Box<dyn std::error::Error>> {
@@ -210,6 +308,18 @@ impl Tensor {
         Ok(from_storage(storage, shape, op, false))
     }
 
+    // Return the row-major contiguous version of the tensor
+    pub fn contiguous(&self) -> Result<Self, Box<dyn std::error::Error>> {
+        if self.layout.is_contiguous() {
+            return Ok(self.clone());
+        }
+        let shape = self.layout.shape();
+        let mut storage = self.device.zeros(&shape, &self.dtype)?;
+        self.storage.read().unwrap().copy_strided_src(&mut storage, 0, &self.layout)?;
+        let op = BackpropOp::none();
+        Ok(from_storage(storage, shape.clone(), op, false))
+    }
+
     pub fn reshape<S: ShapeWithOneHole>(&self, s: S) -> Result<Self, Box<dyn std::error::Error>> {
         let shape = s.into_shape(self.layout.shape().elem_count())?;
         if shape.elem_count() != self.layout.shape().elem_count() {
@@ -219,6 +329,7 @@ impl Tensor {
         let op = BackpropOp::none();
         if self.layout.is_contiguous() {
             let tenosr_ = Tensor_ {
+                id: TensorId::new(),
                 storage: self.storage.clone(),
                 layout: Layout::contiguous_with_offset(shape, self.layout.start_offset()),
                 device: self.device.clone(),
@@ -240,9 +351,41 @@ impl Tensor {
         Ok(from_storage(storage, self.layout.shape().clone(), op, false))
     }
 
+    pub fn narrow(&self, dim: usize, start: usize, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
+        let dims = self.layout.shape().dims();
+        if dim >= dims.len() {
+            return Err("Invalid dim for narrow".into());
+        }
+        if start + len > dims[dim] {
+            return Err("Invalid start and len for narrow".into());
+        }
+
+        if start == 0 && len == dims[dim] {
+            return Ok(self.clone());
+        } else {
+            let mut dims = dims.to_vec();
+            dims[dim] = len;
+            let layout = self.layout.narrow(dim, start, len)?;
+            let tensor_ = Tensor_ {
+                id: TensorId::new(),
+                storage: self.storage.clone(),
+                layout,
+                device: self.device.clone(),
+                dtype: self.dtype,
+                is_var: self.is_var,
+                op: BackpropOp::none(),
+            };
+            Ok(Tensor(Arc::new(tensor_)))
+        }
+    }
+
     unary_op!(recip, Reciprocal);
     unary_op!(abs, Abs);
     unary_op!(neg, Neg);
+    unary_op!(exp, Exp);
+    unary_op!(relu, Relu);
+    unary_op!(log, Log);
+    unary_op!(sqr, Sqr);
 }
 
 impl std::ops::Add<Tensor> for f64 {
@@ -310,8 +453,6 @@ impl std::ops::Div<f64> for Tensor {
 }
 
 
-
-
 fn from_storage<S: Into<Shape>>(
     storage: Storage,
     shape: S,
@@ -324,6 +465,7 @@ fn from_storage<S: Into<Shape>>(
     let layout = Layout::contiguous(shape);
     let storage = Arc::new(RwLock::new(storage));
     let tensor = Tensor_ {
+        id: TensorId::new(),
         storage,
         layout,
         device,
@@ -388,7 +530,7 @@ mod tests {
     fn rand_uniform() {
         let shape = Shape::from(vec![2, 2]);
         let device = Device::Cpu;
-        let tensor = Tensor::rand_uniform(0.0, 1.0, shape, &device, false).unwrap();
+        let tensor = Tensor::rand_uniform(0.0, 1.0, shape, &device).unwrap();
         let storage = tensor.storage.read().unwrap();
         let data = match &*storage {
             Storage::Cpu(storage) => match storage {
@@ -411,7 +553,7 @@ mod tests {
     fn randn() {
         let shape = Shape::from(vec![2, 2]);
         let device = Device::Cpu;
-        let tensor = Tensor::randn(0.0, 1.0, shape, &device, false).unwrap();
+        let tensor = Tensor::randn(0.0, 1.0, shape, &device).unwrap();
         let storage = tensor.storage.read().unwrap();
         let data = match &*storage {
             Storage::Cpu(storage) => match storage {
@@ -448,7 +590,7 @@ mod tests {
         };
         assert_eq!(data, &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
         assert_eq!(b.layout.dims(), &[3, 2]);
-        assert_eq!(b.layout.strides(), &[1,3]);
+        assert_eq!(b.layout.strides(), &[1, 3]);
         assert_eq!(b.layout.start_offset(), 0);
     }
 
@@ -474,6 +616,7 @@ mod tests {
 
     // Transpose matmul
     #[test]
+    #[cfg(feature = "accelerate")]
     fn matmul_t_with_accelerate() {
         let device = Device::Cpu;
         let a = Tensor::ones(Shape::from(vec![10000, 2]), Dtype::F64, &device).unwrap();
@@ -726,7 +869,90 @@ mod tests {
     }
 
     #[test]
-    fn tensor_new_scalar(){
+    fn Exp() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = a.exp().unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        let expected = std::f64::consts::E;
+        assert_eq!(data, &[expected, expected, expected, expected]);
+        assert_eq!(b.layout.dims(), &[2, 2]);
+        assert_eq!(b.layout.strides(), &[2, 1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn Relu() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = a.relu().unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        let expected = 1.0;
+        assert_eq!(data, &[expected, expected, expected, expected]);
+        assert_eq!(b.layout.dims(), &[2, 2]);
+        assert_eq!(b.layout.strides(), &[2, 1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn ones_like() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = a.ones_like().unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        let expected = 1.0;
+        assert_eq!(data, &[expected, expected, expected, expected]);
+        assert_eq!(b.layout.dims(), &[2, 2]);
+        assert_eq!(b.layout.strides(), &[2, 1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn contiguous() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = a.t().unwrap();
+        assert_eq!(b.layout.dims(), &[2, 2]);
+        assert_eq!(b.layout.strides(), &[1, 2]);
+        let c = b.contiguous().unwrap();
+        let storage = c.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        let expected = 1.0;
+        assert_eq!(data, &[expected, expected, expected, expected]);
+        assert_eq!(c.layout.dims(), &[2, 2]);
+        assert_eq!(c.layout.strides(), &[2, 1]);
+        assert_eq!(c.layout.start_offset(), 0);
+    }
+
+    #[test]
+    fn tensor_new_scalar() {
         let device = Device::Cpu;
         let a = 1.0;
         let b = Tensor::new(a, &device).unwrap();
@@ -744,8 +970,9 @@ mod tests {
         assert_eq!(b.layout.start_offset(), 0);
     }
 
+
     #[test]
-    fn tensor_new_1d(){
+    fn tensor_new_1d() {
         let device = Device::Cpu;
         let a = &[1.0, 2.0, 3.0, 4.0];
         let b = Tensor::new(a, &device).unwrap();
@@ -764,9 +991,9 @@ mod tests {
     }
 
     #[test]
-    fn tensor_new_2d(){
+    fn tensor_new_2d() {
         let device = Device::Cpu;
-        let a = &[[1.0, 2.0],[3.0, 4.0]];
+        let a = &[[1.0, 2.0], [3.0, 4.0]];
         let b = Tensor::new(a, &device).unwrap();
         let storage = b.storage.read().unwrap();
         let data = match &*storage {
@@ -783,9 +1010,9 @@ mod tests {
     }
 
     #[test]
-    fn tensor_new_3d(){
+    fn tensor_new_3d() {
         let device = Device::Cpu;
-        let a = &[[[1.0, 2.0],[3.0, 4.0]],[[5.0, 6.0],[7.0, 8.0]]];
+        let a = &[[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]];
         let b = Tensor::new(a, &device).unwrap();
         let storage = b.storage.read().unwrap();
         let data = match &*storage {
@@ -802,10 +1029,10 @@ mod tests {
     }
 
     #[test]
-    fn tensor_new_matmul(){
+    fn tensor_new_matmul() {
         let device = Device::Cpu;
-        let a = &[[1.0, 2.0],[3.0, 4.0]];
-        let b = &[[1.0, 2.0],[3.0, 4.0]];
+        let a = &[[1.0, 2.0], [3.0, 4.0]];
+        let b = &[[1.0, 2.0], [3.0, 4.0]];
         let c = Tensor::new(a, &device).unwrap();
         let d = Tensor::new(b, &device).unwrap();
         let e = c.matmul(&d).unwrap();
@@ -822,7 +1049,6 @@ mod tests {
         assert_eq!(e.layout.strides(), &[2, 1]);
         assert_eq!(e.layout.start_offset(), 0);
     }
-
 }
 
 

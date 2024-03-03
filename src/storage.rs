@@ -5,6 +5,7 @@ use crate::layout::Layout;
 use crate::op::UnaryOpT;
 
 
+#[derive(Debug)]
 pub enum Storage {
    Cpu(CpuStorage)
 }
@@ -30,7 +31,7 @@ impl Storage {
     ) -> Result<(), Box<dyn std::error::Error>> {
         match (self, dst) {
             (Self::Cpu(src), Self::Cpu(dst)) => {
-                src.copy_strided_src(dst, dst_offset, src_l)?;
+                src.copy_strided_src(dst, dst_offset, src_l);
                 Ok(())
             }
         }
@@ -55,8 +56,8 @@ impl Storage {
         mul: f64,
         add: f64,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        match (self) {
-            (Self::Cpu(storage)) => {
+        match self {
+            Self::Cpu(storage) => {
                 let storage = storage.affine(layout, mul, add)?;
                 Ok(Storage::Cpu(storage))
             }

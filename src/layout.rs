@@ -1,6 +1,7 @@
 use crate::shape::Shape;
-use crate::strided_index::StridedBlocks;
+use crate::strided_index::{StridedBlocks, StridedIndex};
 
+#[derive(Debug)]
 pub struct Layout {
     shape: Shape,
     strides: Vec<usize>,
@@ -22,6 +23,21 @@ impl Layout {
         let stride = shape.stride_contiguous();
         Self::new(shape, stride, start_offset)
     }
+
+    pub fn narrow(&self, dim: usize, start: usize, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
+        let dims = self.dims();
+        if dim >= dims.len() {
+            return Err("Dimension out of range".into());
+        }
+
+        if start + len > dims[dim] {
+            return Err("Narrowing out of range".into());
+        }
+
+        let mut dims = dims.to_vec();
+        dims[dim] = len;
+        Ok(Self::new(Shape::from(dims), self.strides.clone(), self.start_offset + start * self.strides[dim]))
+    }
     
     pub fn strided_blocks(&self) -> StridedBlocks {
         let mut block_len = 1;
@@ -40,7 +56,15 @@ impl Layout {
                 len: block_len,
             }
         } else {
-            todo!("MultipleBlocks")
+            let block_start_index = StridedIndex::new(
+                &self.dims()[..index_dims],
+                &self.strides[..index_dims],
+                self.start_offset,
+            );
+            StridedBlocks::MultipleBlocks {
+                block_start_index,
+                block_len,
+            }
         }
         
     }
@@ -120,6 +144,65 @@ mod tests {
         let layout = Layout::new(shape, strides, 0);
         let layout = layout.transpose(1, 2).unwrap();
         assert!(!layout.is_fortran_contiguous());
+    }
+
+    #[test]
+    fn narrow() {
+        let shape = Shape::from(vec![2, 3, 4]);
+        let strides = shape.stride_contiguous();
+        let layout = Layout::new(shape, strides, 0);
+        let layout = layout.narrow(1, 1, 2).unwrap();
+        assert_eq!(layout.shape().dims(), &[2, 2, 4]);
+        assert_eq!(layout.strides(), &[12, 4, 1]);
+        assert_eq!(layout.start_offset(), 4);
+    }
+
+    #[test]
+    fn strided_blocks() {
+        let shape = Shape::from(vec![2, 3, 4]);
+        let strides = shape.stride_contiguous();
+        let layout = Layout::new(shape, strides, 0);
+        let blocks = layout.strided_blocks();
+        assert_eq!(blocks, StridedBlocks::SingleBlock {
+            start_offset: 0,
+            len: 24
+        });
+    }
+
+    #[test]
+    fn strided_blocks_single() {
+        let shape = Shape::from(vec![2, 3, 4]);
+        let strides = vec![12, 4, 1];
+        let layout = Layout::new(shape, strides, 0);
+        let blocks = layout.strided_blocks();
+        assert_eq!(blocks, StridedBlocks::SingleBlock {
+            start_offset: 0,
+            len: 24
+        });
+    }
+
+    #[test]
+    fn strided_blocks_multiple() {
+        let shape = Shape::from(vec![2, 3, 4]);
+        let strides = vec![12, 1, 4];
+        let layout = Layout::new(shape, strides, 0);
+        let blocks = layout.strided_blocks();
+        assert_eq!(blocks, StridedBlocks::MultipleBlocks {
+            block_start_index: StridedIndex::new(&[2,3,4], &[12,1,4], 0),
+            block_len: 1
+        });
+    }
+
+    #[test]
+    fn strided_blocks_multiple_2() {
+        let shape = Shape::from(vec![2, 3, 4]); // strides = [12, 4, 1]
+        let strides = vec![1, 4, 12];
+        let layout = Layout::new(shape, strides, 0);
+        let blocks = layout.strided_blocks();
+        assert_eq!(blocks, StridedBlocks::MultipleBlocks {
+            block_start_index: StridedIndex::new(&[2,3,4], &[1, 4, 12], 0),
+            block_len: 1
+        });
     }
 
 }
