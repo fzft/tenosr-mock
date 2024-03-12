@@ -25,6 +25,17 @@ pub enum UnaryOp {
     Log,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Pow,
+    Max,
+    Min,
+}
+
 
 pub trait UnaryOpT {
     const NAME: &'static str;
@@ -38,7 +49,8 @@ pub trait BinaryOpT {
     const NAME: &'static str;
 
     const V: Self;
-
+    
+    fn f64(v1: f64, v2: f64) -> f64;
 }
 
 pub struct Reciprocal;
@@ -54,6 +66,36 @@ pub struct Relu;
 pub struct Sqr;
 
 pub struct Log;
+
+pub struct Add;
+
+pub struct Mul;
+
+
+impl BinaryOpT for Add {
+    const NAME: &'static str = "add";
+
+    const V: Self = Add;
+    
+    #[inline(always)]
+    fn f64(v1: f64, v2: f64) -> f64 {
+        v1 + v2
+    }
+    
+}
+
+impl BinaryOpT for Mul {
+    const NAME: &'static str = "mul";
+
+    const V: Self = Mul;
+    
+    #[inline(always)]
+    fn f64(v1: f64, v2: f64) -> f64 {
+        v1 * v2
+    }
+    
+}
+
 
 impl UnaryOpT for Reciprocal {
     const NAME: &'static str = "reciprocal";

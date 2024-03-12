@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Mul;
 use crate::tensor::{Tensor, TensorId};
 use crate::op::*;
 use crate::variables::Var;
@@ -15,8 +16,12 @@ impl Tensor {
                 return (tg, nodes);
             }
             let mut track_grad = false;
-
-            let mut nodes = if let Some(op) = node.op() {
+            
+            let mut nodes = if node.is_var() {
+                // Do not call recursively on the "leaf" nodes.
+                track_grad = true;
+                nodes
+            } else if let Some(op) = node.op() {
                 match op {
                     Op::Unary(node, _) => {
                         let (tg, mut nodes) = walk(node, nodes, already_seen);
@@ -48,7 +53,17 @@ impl Tensor {
             if node.is_var() {
                 continue;
             }
-            println!("node: {}", node);
+            let grad = grads.remove(node).expect("Node not found in grads");
+            println!("grad: {}", grad);
+            if let Some(op) = node.op() {
+                match op {
+                    Op::Unary(a, UnaryOp::Sqr) => {
+                        let grad = a.mul(&grad)?.mul(&Tensor::from(2.0))?;
+                        grads.insert(a, grad);
+                    }
+                    _ => unimplemented!("Op not implemented")
+                }
+            }
         }
         Ok(grads)
     }
@@ -91,8 +106,8 @@ mod tests {
         let device = Device::Cpu;
         let a = Var::new(&[[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], &device).unwrap();
         let b = a.sqr().unwrap().backward().unwrap();
-        // let grads = b.get(&a).unwrap();
-        // println!("grad: {}", grads);
+        let grads = b.get(&a).unwrap();
+        println!("grad: {}", grads);
         
     }
 }

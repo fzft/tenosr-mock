@@ -60,6 +60,18 @@ macro_rules! unary_op {
     };
 }
 
+macro_rules! binary_op {
+    ($name:ident, $op:ident) => {
+        pub fn $name(&self, other: &Self) -> Result<Self, Box<dyn std::error::Error>> {
+            let shape = self.layout.shape();
+            let storage = self.storage.read().unwrap().binary_op::<$op>(&*other.storage.read().unwrap(), &self.layout, &other.layout)?;
+            let op = BackpropOp::new1(self, |x| Op::Binary(x, other.clone(), BinaryOp::$op));
+            Ok(from_storage(storage, shape, op, false))
+        }
+    };
+    () => {};
+}
+
 impl Tensor {
     pub fn new<A: NdArray>(
         array: A,
