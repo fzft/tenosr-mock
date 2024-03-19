@@ -11,6 +11,7 @@ pub enum CmpOp {
 
 #[derive(Debug, Clone)]
 pub enum Op{
+    Binary(Tensor, Tensor, BinaryOp),
     Unary(Tensor, UnaryOp),
 }
 
@@ -71,6 +72,10 @@ pub struct Add;
 
 pub struct Mul;
 
+pub struct Sub;
+
+pub struct Div;
+
 
 impl BinaryOpT for Add {
     const NAME: &'static str = "add";
@@ -93,7 +98,28 @@ impl BinaryOpT for Mul {
     fn f64(v1: f64, v2: f64) -> f64 {
         v1 * v2
     }
+}
+
+impl BinaryOpT for Sub {
+    const NAME: &'static str = "sub";
+
+    const V: Self = Sub;
     
+    #[inline(always)]
+    fn f64(v1: f64, v2: f64) -> f64 {
+        v1 - v2
+    }
+}
+
+impl BinaryOpT for Div {
+    const NAME: &'static str = "div";
+
+    const V: Self = Div;
+    
+    #[inline(always)]
+    fn f64(v1: f64, v2: f64) -> f64 {
+        v1 / v2
+    }
 }
 
 
@@ -190,6 +216,14 @@ impl BackpropOp {
        } else {
            Self(None)
        }
+    }
+    
+    pub fn new2(arg1: &Tensor, arg2: &Tensor, f: impl Fn(Tensor, Tensor) -> Op) -> Self {
+        if arg1.track_op() || arg2.track_op() {
+            Self(Some(f(arg1.clone(), arg2.clone())))
+        } else {
+            Self(None)
+        }
     }
     pub fn none() -> Self {
         Self(None)

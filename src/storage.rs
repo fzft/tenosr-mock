@@ -2,7 +2,7 @@ use crate::cpu_backend::CpuStorage;
 use crate::device::Device;
 use crate::dtype::Dtype;
 use crate::layout::Layout;
-use crate::op::UnaryOpT;
+use crate::op::{UnaryOpT, BinaryOpT};
 
 
 #[derive(Debug)]
@@ -68,6 +68,15 @@ impl Storage {
         match self {
             Self::Cpu(storage) => {
                 let storage = storage.unary_op::<B>(layout)?;
+                Ok(Storage::Cpu(storage))
+            }
+        }
+    }
+    
+    pub fn binary_op<B: BinaryOpT>(&self, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self, Box<dyn std::error::Error>> {
+        match (self, rhs) {
+            (Self::Cpu(lhs), Self::Cpu(rhs)) => {
+                let storage = lhs.binary_op::<B>(rhs, lhs_l, rhs_l)?;
                 Ok(Storage::Cpu(storage))
             }
         }

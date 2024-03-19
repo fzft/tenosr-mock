@@ -53,7 +53,7 @@ macro_rules! unary_op {
     ($name:ident, $op:ident) => {
         pub fn $name(&self) -> Result<Self, Box<dyn std::error::Error>> {
            let shape = self.layout.shape();
-           let storage = self.storage.read().unwrap().unary_op::<$op>(&self.layout)?;
+           let storage = self.storage().unary_op::<$op>(&self.layout)?;
            let op = BackpropOp::new1(self, |x| Op::Unary(x, UnaryOp::$op));
            Ok(from_storage(storage, shape.clone(), op, false))
         }
@@ -63,13 +63,13 @@ macro_rules! unary_op {
 macro_rules! binary_op {
     ($name:ident, $op:ident) => {
         pub fn $name(&self, other: &Self) -> Result<Self, Box<dyn std::error::Error>> {
-            let shape = self.layout.shape();
-            let storage = self.storage.read().unwrap().binary_op::<$op>(&*other.storage.read().unwrap(), &self.layout, &other.layout)?;
-            let op = BackpropOp::new1(self, |x| Op::Binary(x, other.clone(), BinaryOp::$op));
-            Ok(from_storage(storage, shape, op, false))
+            // Guarantee binary op has same shape
+            let shape = self.same_shape_binary_op(other)?;
+            let storage = self.storage().binary_op::<$op>(&*other.storage(), self.layout(), other.layout())?;
+            let op = BackpropOp::new2(self, other, |x, y| Op::Binary(x, y, BinaryOp::$op));
+            Ok(from_storage(storage, shape.clone(), op, false))
         }
     };
-    () => {};
 }
 
 impl Tensor {
@@ -111,8 +111,8 @@ impl Tensor {
         &self.layout
     }
 
-    pub fn storage(&self) -> &Arc<RwLock<Storage>> {
-        &self.storage
+    pub fn storage(&self) -> std::sync::RwLockReadGuard<'_, Storage> {
+        self.storage.read().unwrap()
     }
 
     pub fn start_offset(&self) -> usize {
@@ -390,6 +390,15 @@ impl Tensor {
             Ok(Tensor(Arc::new(tensor_)))
         }
     }
+    
+    pub fn same_shape_binary_op(&self, rhs: &Self) -> Result<&Shape, Box<dyn std::error::Error>> {
+        let lhs = self.shape();
+        let rhs = rhs.shape();
+        if lhs != rhs {
+            return Err("Invalid shape for binary op".into());
+        }
+        Ok(lhs)
+    }
 
     unary_op!(recip, Reciprocal);
     unary_op!(abs, Abs);
@@ -398,6 +407,11 @@ impl Tensor {
     unary_op!(relu, Relu);
     unary_op!(log, Log);
     unary_op!(sqr, Sqr);
+
+    binary_op!(add, Add);
+    binary_op!(sub, Sub);
+    binary_op!(mul, Mul);
+    binary_op!(div, Div);
 }
 
 impl std::ops::Add<Tensor> for f64 {
@@ -1060,6 +1074,24 @@ mod tests {
         assert_eq!(e.layout.dims(), &[2, 2]);
         assert_eq!(e.layout.strides(), &[2, 1]);
         assert_eq!(e.layout.start_offset(), 0);
+    }
+    
+    #[test]
+    fn add_tensor() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let c = a + b;
+        let storage = c.unwrap().storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        let expected = 2.0;
+        assert_eq!(data, &[expected, expected, expected, expected]);
     }
 }
 

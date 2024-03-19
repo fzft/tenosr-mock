@@ -10,7 +10,7 @@ use crate::dtype::Dtype;
 use crate::accelerate::dgemm;
 use crate::layout::Layout;
 use crate::strided_index::StridedBlocks;
-use crate::op::UnaryOpT;
+use crate::op::{BinaryOpT, UnaryOpT};
 
 
 #[derive(Debug, Clone)]
@@ -133,6 +133,16 @@ impl CpuStorage {
             _ => unimplemented!("Not implemented yet")
         }
     }
+    
+    pub fn binary_op<B: BinaryOpT>(&self, rhs: &CpuStorage, lhs_l: &Layout, rhs_l: &Layout) -> Result<CpuStorage, Box<dyn Error>> {
+        match (self, rhs) {
+            (CpuStorage::F64(lhs), CpuStorage::F64(rhs)) => {
+                let result = binary_map(lhs_l, rhs_l, lhs, rhs, B::f64);
+                Ok(CpuStorage::F64(result))
+            }
+            _ => unimplemented!("Not implemented yet")
+        }
+    }
 
     pub fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<CpuStorage, Box<dyn Error>> {
         match self {
@@ -227,6 +237,17 @@ fn unary_map<T: Copy, U: Copy, F: FnMut(T)-> U>(data: &[T], layout: &Layout, mut
     match layout.strided_blocks() {
         StridedBlocks::SingleBlock {start_offset, len} => {
             data[start_offset..start_offset + len].iter().map(|&x| op(x)).collect()
+        }
+        _ => unimplemented!("Not implemented yet")
+    }
+}
+
+fn binary_map<T: Copy, U: Copy, V: Copy, F: FnMut(T, V) -> U>(lhs_l: &Layout, rhs_l: &Layout, lhs: &[T], rhs: &[V], mut op: F) -> Vec<U> {
+    match (lhs_l.strided_blocks(), rhs_l.strided_blocks()) {
+        (StridedBlocks::SingleBlock {start_offset: lhs_start, len: lhs_len}, StridedBlocks::SingleBlock {start_offset: rhs_start, len: rhs_len}) => {
+            let lhs = &lhs[lhs_start..lhs_start + lhs_len];
+            let rhs = &rhs[rhs_start..rhs_start + rhs_len];
+            lhs.iter().zip(rhs.iter()).map(|(&x, &y)| op(x, y)).collect()
         }
         _ => unimplemented!("Not implemented yet")
     }
