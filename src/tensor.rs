@@ -168,6 +168,10 @@ impl Tensor {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         Self::zeros_impl(shape, dtype, device, false)
     }
+    
+    pub fn zeros_like(&self) -> Result<Self, Box<dyn std::error::Error>> {
+        Tensor::zeros(self.shape(), self.dtype, &self.device)
+    }
 
     pub fn rand_uniform<S: Into<Shape>>(
         lo: f64,
@@ -407,6 +411,7 @@ impl Tensor {
     unary_op!(relu, Relu);
     unary_op!(log, Log);
     unary_op!(sqr, Sqr);
+    unary_op!(sqrt, Sqrt);
 
     binary_op!(add, Add);
     binary_op!(sub, Sub);
@@ -913,6 +918,66 @@ mod tests {
         assert_eq!(b.layout.strides(), &[2, 1]);
         assert_eq!(b.layout.start_offset(), 0);
     }
+    
+    #[test]
+    fn Log() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = a.log().unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        let expected = 0.0;
+        assert_eq!(data, &[expected, expected, expected, expected]);
+        assert_eq!(b.layout.dims(), &[2, 2]);
+        assert_eq!(b.layout.strides(), &[2, 1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+    
+    #[test]
+    fn Sqr() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = a.sqr().unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        let expected = 1.0;
+        assert_eq!(data, &[expected, expected, expected, expected]);
+        assert_eq!(b.layout.dims(), &[2, 2]);
+        assert_eq!(b.layout.strides(), &[2, 1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
+    
+    #[test]
+    fn Sqrt() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = a.sqrt().unwrap();
+        let storage = b.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        let expected = 1.0;
+        assert_eq!(data, &[expected, expected, expected, expected]);
+        assert_eq!(b.layout.dims(), &[2, 2]);
+        assert_eq!(b.layout.strides(), &[2, 1]);
+        assert_eq!(b.layout.start_offset(), 0);
+    }
 
     #[test]
     fn Relu() {
@@ -1077,12 +1142,48 @@ mod tests {
     }
     
     #[test]
-    fn add_tensor() {
+    fn mul() {
         let device = Device::Cpu;
         let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
         let b = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
-        let c = a + b;
-        let storage = c.unwrap().storage.read().unwrap();
+        let c = a.mul(&b).unwrap();
+        let storage = c.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        let expected = 1.0;
+        assert_eq!(data, &[expected, expected, expected, expected]);
+    }
+    
+    #[test]
+    fn div() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let c = a.div(&b).unwrap();
+        let storage = c.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        let expected = 1.0;
+        assert_eq!(data, &[expected, expected, expected, expected]);
+    }
+    
+    #[test]
+    fn add() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let c = a.add(&b).unwrap();
+        let storage = c.storage.read().unwrap();
         let data = match &*storage {
             Storage::Cpu(storage) => match storage {
                 CpuStorage::F64(data) => data,
@@ -1091,6 +1192,24 @@ mod tests {
             _ => panic!("Invalid device")
         };
         let expected = 2.0;
+        assert_eq!(data, &[expected, expected, expected, expected]);
+    }
+    
+    #[test]
+    fn sub() {
+        let device = Device::Cpu;
+        let a = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let b = Tensor::ones(Shape::from(vec![2, 2]), Dtype::F64, &device).unwrap();
+        let c = a.sub(&b).unwrap();
+        let storage = c.storage.read().unwrap();
+        let data = match &*storage {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F64(data) => data,
+                _ => panic!("Invalid storage type")
+            },
+            _ => panic!("Invalid device")
+        };
+        let expected = 0.0;
         assert_eq!(data, &[expected, expected, expected, expected]);
     }
 }

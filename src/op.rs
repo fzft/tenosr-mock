@@ -23,6 +23,7 @@ pub enum UnaryOp {
     Exp,
     Relu,
     Sqr,
+    Sqrt,
     Log,
 }
 
@@ -65,6 +66,8 @@ pub struct Exp;
 pub struct Relu;
 
 pub struct Sqr;
+
+pub struct Sqrt;
 
 pub struct Log;
 
@@ -165,6 +168,17 @@ impl UnaryOpT for Exp {
     #[inline(always)]
     fn f64(v1: f64) -> f64 {
         v1.exp()
+    }
+}
+
+impl UnaryOpT for Sqrt {
+    const NAME: &'static str = "sqrt";
+
+    const V: Self = Sqrt;
+
+    #[inline(always)]
+    fn f64(v1: f64) -> f64 {
+        v1.sqrt()
     }
 }
 

@@ -54,12 +54,21 @@ impl Tensor {
                 continue;
             }
             let grad = grads.remove(node).expect("Node not found in grads");
-            println!("grad: {}", grad);
             if let Some(op) = node.op() {
                 match op {
                     Op::Unary(a, UnaryOp::Sqr) => {
-                        let grad = a.mul(&grad)?.mul(&Tensor::from(2.0))?;
-                        grads.insert(a, grad);
+                        let arg_grad = a.mul(&grad)?.affine(2.0, 0.0)?;
+                        let sum_grad = grads.or_insert(a)?;
+                        *sum_grad = sum_grad.add(&arg_grad)?
+                    }
+                    
+                    Op::Unary(a, UnaryOp::Sqrt) => {
+                        let arg_grad = grad.div(node)?.affine(0.5, 0.0)?;
+                        let sum_grad = grads.or_insert(a)?;
+                        *sum_grad = sum_grad.add(&arg_grad)?
+                    }
+                    
+                    Op::Unary(a, UnaryOp::Abs) => {
                     }
                     _ => unimplemented!("Op not implemented")
                 }
@@ -92,6 +101,17 @@ impl GradStore {
     pub fn insert(&mut self, tensor: &Tensor, grad: Tensor) -> Option<Tensor> {
         self.0.insert(tensor.id(), grad)
     }
+    
+    pub fn or_insert(&mut self, tensor: &Tensor) -> Result<&mut Tensor, Box<dyn std::error::Error>> {
+        let grad = match self.0.entry(tensor.id()) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let grad = Tensor::zeros_like(tensor)?;
+                entry.insert(grad)
+            }
+        };
+        Ok(grad)
+    }
 
 }
 
@@ -102,13 +122,22 @@ mod tests {
     use crate::shape::Shape;
 
     #[test]
-    fn sorted_nodes() {
+    fn sqr_backprop() {
         let device = Device::Cpu;
         let a = Var::new(&[[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], &device).unwrap();
         let b = a.sqr().unwrap().backward().unwrap();
         let grads = b.get(&a).unwrap();
-        println!("grad: {}", grads);
-        
+        println!("grad: {:?}", grads.storage());
+    }
+    
+    #[test]
+    fn sqrt_backprop() {
+        let device = Device::Cpu;
+        let a = Var::new(&[[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], &device).unwrap();
+        let b = a.sqrt().unwrap().backward().unwrap();
+        let grads = b.get(&a).unwrap();
+        let expected = [[0.0, 0.5, 0.25], [0.16666667, 0.125, 0.1]];
+        println!("grad: {:?}", grads.storage());
     }
 }
 

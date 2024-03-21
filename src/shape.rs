@@ -50,6 +50,12 @@ impl From <(usize, usize, usize)> for Shape {
     }
 }
 
+impl From <&Shape> for Shape {
+    fn from(shape: &Shape) -> Self {
+        Self(shape.0.to_vec())
+    }
+}
+
 impl From<usize> for Shape {
     fn from(shape: usize) -> Self {
         Self(vec![shape])
